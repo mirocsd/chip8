@@ -9,6 +9,11 @@
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_timer.h>
 
+typedef struct {
+  SDL_Window *win;
+  SDL_Texture *tex;
+  SDL_Renderer *rend;
+} sdl_t;
 void handle_signal(int signal) {
   if (signal == SIGINT || signal == SIGTERM || signal == SIGTSTP) {
     std::cout << "Exiting..." << std::endl;
@@ -17,125 +22,95 @@ void handle_signal(int signal) {
   }
 }
 
-
-int *memory = new int[4096];
-int main() {
-
-  // Register the signal handler for stopping with CTRL+Z/C
-  signal(SIGINT, handle_signal);
-  signal(SIGTERM, handle_signal);
-  signal(SIGTSTP, handle_signal);
-
-  // intializing SDL
+// Intializing SDL
+void init_sdl(sdl_t *sdl) {
   if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
       printf("error initializing SDL: %s\n", SDL_GetError());
   }
-  // window width and height, to scale 64x32 pixels to
+  
+
+  // Defining window width and height
   int SCREEN_WIDTH = 640;
   int SCREEN_HEIGHT = 320;
-  // actual pixel resolution
-  int RES_WIDTH = 64;
-  int RES_HEIGHT = 32;
-
-  SDL_Window* win = SDL_CreateWindow("CHIP8", 
+  sdl->win = SDL_CreateWindow("CHIP8", 
                                      SDL_WINDOWPOS_CENTERED, 
                                      SDL_WINDOWPOS_CENTERED, 
                                      SCREEN_WIDTH, SCREEN_HEIGHT, 0);
 
-  Uint32 render_flags = SDL_RENDERER_ACCELERATED;
-
-  SDL_Renderer* rend = SDL_CreateRenderer(win, -1, render_flags);
-
-  SDL_Surface* surface;
-
-  surface = IMG_Load("./output-onlinepngtools.png");
-
-  SDL_Texture* tex = SDL_CreateTextureFromSurface(rend, surface);
-
-  SDL_FreeSurface(surface);
+  // Defining window resolution
+  int RES_WIDTH = 64;
+  int RES_HEIGHT = 32;
 
 
-  SDL_Rect dest;
+  // Creating renderer
+  sdl->rend = SDL_CreateRenderer(sdl->win, -1, SDL_RENDERER_ACCELERATED);
 
 
-  SDL_QueryTexture(tex, NULL, NULL, &dest.w, &dest.h);
-  
-  dest.w /= 1;
-  dest.h /= 1;
+  // Defining foreground/background colors
 
-  dest.x = (64 - dest.w) / 2;
-  dest.y = (32 - dest.h) / 2;
-
-  int close = 0;
-
-  int speed = 30;
-
-
-  while (!close) {
-    SDL_Event event;
-
-    while (SDL_PollEvent(&event)) {
-      switch (event.type) {
-
-      case SDL_QUIT:
-        close = 1;
-        break;
-      
-      case SDL_KEYDOWN:
-        switch (event.key.keysym.scancode) {
-        case SDL_SCANCODE_W:
-        case SDL_SCANCODE_UP:
-          dest.y -= speed / 30;
-          break;
-        case SDL_SCANCODE_A:
-        case SDL_SCANCODE_LEFT:
-          dest.x -= speed / 30;
-          break;
-        case SDL_SCANCODE_S:
-        case SDL_SCANCODE_DOWN:
-          dest.y += speed / 30;
-          break;
-        case SDL_SCANCODE_D:
-        case SDL_SCANCODE_RIGHT:
-          dest.x += speed / 30;
-          break;
-        default:
-          break;
-        }
-      }
-    }
+  const uint8_t FG_R = 0xFF;
+  const uint8_t FG_G = 0xFF;
+  const uint8_t FG_B = 0xFF;
+  const uint8_t FG_A = 0xFF;
+  const uint8_t BG_R = 0x00;
+  const uint8_t BG_G = 0x00;
+  const uint8_t BG_B = 0x00;
+  const uint8_t BG_A = 0x00;
 
 
-    if (dest.x + dest.w > 64)
-      dest.x = 1000 - dest.w;
+  SDL_SetRenderDrawColor(sdl->rend, BG_R, BG_G, BG_B, BG_A);
+  // Clear the screen
+  SDL_RenderClear(sdl->rend);
+}
 
-    if (dest.x < 0)
-      dest.x = 0;
+void reset_screen(sdl_t *sdl) {
+  // Defining foreground/background colors
+  const uint8_t FG_R = 0xFF;
+  const uint8_t FG_G = 0xFF;
+  const uint8_t FG_B = 0xFF;
+  const uint8_t FG_A = 0xFF;
+  const uint8_t BG_R = 0x00;
+  const uint8_t BG_G = 0x00;
+  const uint8_t BG_B = 0x00;
+  const uint8_t BG_A = 0x00;
 
-    if (dest.y + dest.h > 32)
-      dest.y = 32 - dest.h;
 
-    if (dest.y < 0)
-      dest.y = 0;
+  SDL_SetRenderDrawColor(sdl->rend, BG_R, BG_G, BG_B, BG_A);
+  // Clear the screen
+  SDL_RenderClear(sdl->rend);
+}
 
-    SDL_RenderClear(rend);
-    SDL_RenderCopy(rend, tex, NULL, &dest);
+void update_screen(sdl_t *sdl) {
+  SDL_RenderPresent(sdl->rend);
+}
+// Register the signal handler for stopping with CTRL+Z/C
+void init_sighandle(void) {
+  signal(SIGINT, handle_signal);
+  signal(SIGTERM, handle_signal);
+  signal(SIGTSTP, handle_signal);
+}
 
-    SDL_RenderPresent(rend);
-
-    SDL_Delay(1000/60);
-  }
-
-  SDL_DestroyTexture(tex);
-  SDL_DestroyRenderer(rend);
-  SDL_DestroyWindow(win);
+void exit_cleanup(sdl_t *sdl) {
   SDL_Quit();
+  SDL_DestroyTexture(sdl->tex);
+  SDL_DestroyRenderer(sdl->rend);
+  SDL_DestroyWindow(sdl->win);
+}
 
+int main() {
+  init_sighandle();
+  
+  sdl_t sdl = {0};
+  init_sdl(&sdl);
+  
+  // Main loop
+  while(1) {
 
+    // Delays for 60Hz, should compensate for time spent executing CHIP8 instructions later on
+    SDL_Delay(1000/60);
 
-
-
-  memory[1] = 3;
-  std::cout << memory[1] << std::endl;
-  return 0;
+    update_screen(&sdl);
+  }
+  
+  exit_cleanup(&sdl);
 }
