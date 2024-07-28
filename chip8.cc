@@ -91,6 +91,14 @@ enum emulator_state_t {
   PAUSED,
 };
 
+struct instruction {
+  uint16_t opcode;
+  uint16_t nnn; // constant - last 12 bits - *nnn
+  uint8_t kk;   // constant - last 8 bits  - **kk 
+  uint8_t n;    // constant - last 4 bits  - ***n
+  uint8_t x;    // lower 4 bits of high byte of instruction - *x** - register identifier
+  uint8_t y;    // upper 4 bits of low byte of instruction  - **y* - register identifier
+};
 class chip8_obj {
  public:
   emulator_state_t state;
@@ -101,9 +109,10 @@ class chip8_obj {
   uint16_t I;            // Index register
   uint16_t PC;
   uint8_t delay_timer;
-  uint8_t sound_timer; // Beeps when nonzero
-  bool keypad[16];     // Hex keypad
-  char *rom_name;      // Current ROM
+  uint8_t sound_timer;   // Beeps when nonzero
+  bool keypad[16];       // Hex keypad
+  char *rom_name;        // Current ROM
+  instruction inst;      // Current instruction
 
   const uint32_t start_address = 0x200;
   chip8_obj() { state = RUNNING; }
@@ -185,6 +194,12 @@ class chip8_obj {
       }
     }
   }
+
+  void run_instruction() {
+    
+
+
+  }
 };
 
 void handle_extern_signal(int signal) {
@@ -202,7 +217,7 @@ void init_sighandle(void) {
   signal(SIGTSTP, handle_extern_signal);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv) { 
   init_sighandle();
 
   // Init configuration
@@ -213,6 +228,12 @@ int main(int argc, char **argv) {
   sdl.initialize(config);
 
   chip8_obj chip8;
+  if (argc < 2) {
+    std::cout << "Usage: " << argv[0] << " <path to rom file>" << std::endl;
+    sdl.exit_cleanup();
+    exit(0);
+  }
+
   char *rom_name = argv[1];
   chip8.initialize(rom_name);
 
