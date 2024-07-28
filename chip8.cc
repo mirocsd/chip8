@@ -1,4 +1,7 @@
 // for debugging I/O
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
 #include <iostream>
 
 // for signal handling
@@ -9,15 +12,7 @@
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_timer.h>
 
-struct sdl_t
-{
-  SDL_Window *win;
-  SDL_Texture *tex;
-  SDL_Renderer *rend;
-};
-
-struct config_t
-{
+struct config_obj {
   uint32_t SCREEN_WIDTH;
   uint32_t SCREEN_HEIGHT;
   uint8_t FG_R;
@@ -29,20 +24,167 @@ struct config_t
   uint8_t BG_B;
   uint8_t BG_A;
   uint32_t scale;
+
+  config_obj() {
+    // Screen width and height
+    SCREEN_WIDTH = 64;
+    SCREEN_HEIGHT = 32;
+    // Foreground/background colors
+    FG_R = 0xFF;
+    FG_G = 0xFF;
+    FG_B = 0xFF;
+    FG_A = 0xFF;
+    BG_R = 0x00;
+    BG_G = 0x00;
+    BG_B = 0x00;
+    BG_A = 0x00;
+    scale = 20;
+  }
 };
 
-enum emulator_state_t
-{
+class sdl_obj {
+ public:
+  SDL_Window *win;
+  SDL_Texture *tex;
+  SDL_Renderer *rend;
+
+  // ctor just runs the initialization function
+  sdl_obj() {
+    if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
+      std::cout << "Error initializing SDL: " << SDL_GetError() << std::endl;
+    }
+  }
+
+  // "Initialize" SDL (create window and renderer)
+  void initialize(config_obj config) {
+    this->win = SDL_CreateWindow("CHIP8", SDL_WINDOWPOS_CENTERED,
+                                 SDL_WINDOWPOS_CENTERED,
+                                 config.SCREEN_WIDTH * config.scale,
+                                 config.SCREEN_HEIGHT * config.scale, 0);
+
+    this->rend = SDL_CreateRenderer(this->win, -1, SDL_RENDERER_ACCELERATED);
+  }
+
+  void reset_screen(config_obj config) {
+    SDL_SetRenderDrawColor(rend, config.BG_R, config.BG_G, config.BG_B,
+                           config.BG_A);
+    // Clear the screen
+    SDL_RenderClear(rend);
+  }
+
+  void update_screen() { SDL_RenderPresent(rend); }
+
+  // Perform exit cleanup
+  void exit_cleanup() {
+    SDL_DestroyTexture(tex);
+    SDL_DestroyRenderer(rend);
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+  }
+
+  ~sdl_obj() { exit_cleanup(); }
+};
+
+enum emulator_state_t {
   QUIT,
   RUNNING,
   PAUSED,
 };
 
-struct chip8_t
-{
+class chip8_obj {
+ public:
   emulator_state_t state;
-  uint8_t ram[4096];
-  int display[64*32];
+  uint8_t ram[4096];     // CHIP8 Memory
+  bool display[64 * 32]; // Display array
+  uint16_t stack[12];    // Subroutine stacl
+  uint8_t V[16];         // Registers V0-VF
+  uint16_t I;            // Index register
+  uint16_t PC;
+  uint8_t delay_timer;
+  uint8_t sound_timer; // Beeps when nonzero
+  bool keypad[16];     // Hex keypad
+  char *rom_name;      // Current ROM
+
+  const uint32_t start_address = 0x200;
+  chip8_obj() { state = RUNNING; }
+
+  void initialize(char rom_name[]) {
+    const uint32_t start_address = 0x200;
+    const uint8_t font[] = {
+        0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+        0x20, 0x60, 0x20, 0x20, 0x70, // 1
+        0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+        0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+        0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+        0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+        0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+        0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+        0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+        0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+        0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+        0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+        0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+        0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+        0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+        0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+    };
+    PC = start_address;
+
+    // Load the font into memory
+    std::memcpy(ram, font, sizeof(font));
+
+    this->rom_name = rom_name;
+    // Open ROM
+    FILE *rom = fopen(rom_name, "rb");
+    if (!rom) { SDL_Log("Could not open rom file %s\n", rom_name); }
+
+    const size_t rom_size = std::filesystem::file_size(rom_name);
+    const size_t max_size = sizeof ram - start_address;
+
+    // Check ROM size
+    if (rom_size > max_size) { SDL_Log("Rom file is too large"); }
+
+    // Load ROM
+    fread(ram + start_address, rom_size, 1, rom);
+    fclose(rom);
+  }
+
+  void handle_input() {
+    SDL_Event event;
+
+    while (SDL_PollEvent(&event)) {
+      switch (event.type) {
+      case SDL_QUIT:
+        state = QUIT;
+        return;
+
+      case SDL_KEYDOWN:
+        switch (event.key.keysym.sym) {
+        case SDLK_ESCAPE:
+          state = QUIT;
+          return;
+
+        case SDLK_SPACE:
+          if (state == RUNNING) {
+            state = PAUSED;
+            std::cout << "CHIP8 PAUSED" << std::endl;
+          } else {
+            state = RUNNING;
+          }
+
+        default:
+          break;
+        }
+        break;
+
+      case SDL_KEYUP:
+        break;
+
+      default:
+        break;
+      }
+    }
+  }
 };
 
 void handle_extern_signal(int signal) {
@@ -53,48 +195,6 @@ void handle_extern_signal(int signal) {
   }
 }
 
-void init_config(config_t &config) {
-  // Screen width and height
-  config.SCREEN_WIDTH = 64;
-  config.SCREEN_HEIGHT = 32;
-  // Foreground/background colors
-  config.FG_R = 0xFF;
-  config.FG_G = 0xFF;
-  config.FG_B = 0xFF;
-  config.FG_A = 0xFF;
-  config.BG_R = 0x00;
-  config.BG_G = 0x00;
-  config.BG_B = 0x00;
-  config.BG_A = 0x00;
-  config.scale = 20;
-}
-
-// Intializing SDL
-void init_sdl(sdl_t *sdl, config_t config) {
-  if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
-      printf("error initializing SDL: %s\n", SDL_GetError());
-  }
-  
-  sdl->win = SDL_CreateWindow("CHIP8", 
-                                     SDL_WINDOWPOS_CENTERED, 
-                                     SDL_WINDOWPOS_CENTERED, 
-                                     config.SCREEN_WIDTH * config.scale, 
-                                     config.SCREEN_HEIGHT * config.scale, 0);
- 
-  // Creating renderer
-  sdl->rend = SDL_CreateRenderer(sdl->win, -1, SDL_RENDERER_ACCELERATED);
-
-}
-
-void reset_screen(sdl_t *sdl, config_t config) {
-  SDL_SetRenderDrawColor(sdl->rend, config.BG_R, config.BG_G,config.BG_B, config.BG_A);
-  // Clear the screen
-  SDL_RenderClear(sdl->rend);
-}
-
-void update_screen(sdl_t *sdl) {
-  SDL_RenderPresent(sdl->rend);
-}
 // Register the signal handler for stopping with CTRL+Z/C
 void init_sighandle(void) {
   signal(SIGINT, handle_extern_signal);
@@ -102,65 +202,35 @@ void init_sighandle(void) {
   signal(SIGTSTP, handle_extern_signal);
 }
 
-// Do final SDL cleanups
-void exit_cleanup(sdl_t *sdl) {
-  SDL_DestroyTexture(sdl->tex);
-  SDL_DestroyRenderer(sdl->rend);
-  SDL_DestroyWindow(sdl->win);
-  SDL_Quit();
-}
-
-void handle_input(chip8_t &chip8) {
-  SDL_Event event;
-
-  while (SDL_PollEvent(&event)) {
-    switch(event.type) {
-      case SDL_QUIT:
-        chip8.state = QUIT;
-        return;
-      
-      case SDL_KEYDOWN:
-        switch (event.key.keysym.sym) {
-          case SDLK_ESCAPE:
-            chip8.state = QUIT;
-            return;
-          default:
-            break;
-        }
-        break;
-
-      case SDL_KEYUP:
-        break;
-
-      default:
-        break;
-    }
-  }
-}
-
-int main() {
+int main(int argc, char **argv) {
   init_sighandle();
-  
-  // Init SDL
-  sdl_t sdl = {0};
-  
+
   // Init configuration
-  config_t config = {0};
-  init_config(config);
+  config_obj config;
 
-  init_sdl(&sdl, config);
-  
-  chip8_t chip8;
-  chip8.state = RUNNING; // Default state is RUNNING
-  reset_screen(&sdl, config);
+  // Init SDL
+  sdl_obj sdl;
+  sdl.initialize(config);
+
+  chip8_obj chip8;
+  char *rom_name = argv[1];
+  chip8.initialize(rom_name);
+
+  sdl.reset_screen(config);
   // Main loop
-  while(chip8.state != QUIT) {
-    handle_input(chip8);
-    // Delays for 60Hz, should compensate for time spent executing CHIP8 instructions as well
-    SDL_Delay(1000/60);
+  while (chip8.state != QUIT) {
+    chip8.handle_input();
 
-    update_screen(&sdl);
+    
+
+
+
+    // Delays for 60Hz, should compensate for time spent executing CHIP8
+    // instructions as well
+    SDL_Delay(1000 / 60);
+
+    sdl.update_screen();
   }
-  
-  exit_cleanup(&sdl);
+
+  sdl.exit_cleanup();
 }
