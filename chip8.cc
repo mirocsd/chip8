@@ -104,7 +104,8 @@ class chip8_obj {
   emulator_state_t state;
   uint8_t ram[4096];     // CHIP8 Memory
   bool display[64 * 32]; // Display array
-  uint16_t stack[12];    // Subroutine stacl
+  uint16_t stack[12];    // Subroutine stack
+  uint16_t *stack_ptr;
   uint8_t V[16];         // Registers V0-VF
   uint16_t I;            // Index register
   uint16_t PC;
@@ -138,6 +139,7 @@ class chip8_obj {
         0xF0, 0x80, 0xF0, 0x80, 0x80  // F
     };
     PC = start_address;
+    *stack_ptr = stack[0];
 
     // Load the font into memory
     std::memcpy(ram, font, sizeof(font));
@@ -195,10 +197,110 @@ class chip8_obj {
     }
   }
 
-  void run_instruction() {
+  void run_instruction(config_obj config) {
+    inst.opcode = (ram[PC] << 8) | ram[PC+1]; 
+    PC += 2;
     
+    inst.nnn = inst.opcode & 0x0FFF;
+    inst.kk = inst.opcode & 0x0FF;
+    inst.n = inst.opcode & 0x0F;
+    inst.x = (inst.opcode >> 8) & 0x0F;
+    inst.y = (inst.opcode >> 4) & 0x0F;
+    switch ((inst.opcode >> 12) & 0x0F) {
+      case 0x0:
+        switch (inst.kk) {
+          case 0xE0: // 0x00E0 - Clear the display
+            memset(display, false, sizeof display);
+          case 0xEE: // 0x00EE - Return from a subroutine
+            // Pop last address from stack, set PC to this (the RA)
+            PC = *--stack_ptr;
+        }
+
+      case 0x01:
+        PC = inst.nnn;
+        break;
+
+      case 0x02: // 0x2nnn - Call subroutine at nnn
+        *stack_ptr++ = PC; // Store the current (return) address on top of stack
+        PC = inst.nnn; // PC will be at nnn for start of subroutine
+        break;
+      
+      case 0x03: // 0x3xkk - Skip next instruction if Vx = kk
+        if (V[inst.x] == inst.kk) { PC += 2; }
+        break;
+
+      case 0x04: // 0x4xkk - Skip next instruction if Vx != kk
+        if (V[inst.x] != inst.kk) { PC += 2; }
+        break;
+
+      case 0x05: // 0x5xy0 - Skip next instruction if Vx = Vy
+        if (V[inst.x] == V[inst.y]) { PC += 2; }
+        break;
+
+      case 0x06: // Set Vx = kk
+        V[inst.x] = inst.kk;
+        break;
+
+      case 0x07: // Set Vx = Vx + kk
+        V[inst.x] = inst.x + inst.kk;
+        break;
+
+      case 0x08:
+        switch (inst.n) {
+          case 0x00: // 0x8xy0 - Set Vx = Vy
+            V[inst.x] = V[inst.y];
+            break;
+          
+          case 0x01: // 0x8xy1 - Set Vx = Vx OR Vy
+            V[inst.x] = V[inst.x] | V[inst.y];
+            break;
+
+          case 0x02: // 0x8xy2 - Set Vx = Vx AND Vy
+            V[inst.x] = V[inst.x] & V[inst.y];
+            break;
 
 
+        }
+
+      case 0x0A: // 0xAnnn - Set register I to nnn
+        I = inst.nnn;
+        break;
+
+      case 0x0D: // 0xDxyn - Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision
+      {
+        uint8_t x_coord = V[inst.x] % config.SCREEN_WIDTH; 
+        uint8_t y_coord = V[inst.y] % config.SCREEN_HEIGHT;
+        V[0xF] = 0; // Set flag to 0
+        
+        // For all n rows of the sprite
+        for (uint8_t i = 0; i < inst.n; i++) {
+          const uint8_t sprite_data = ram[I + i]; // Get next byte of sprite data
+          
+          for (int8_t j = 7; j <= 0; j--) {
+            if ((sprite_data & (1 << j)) && display[y_coord * config.SCREEN_WIDTH + x_coord]) {
+              V[0xF] = 1; // Set the carry flag since sprite pixel and display pixel both on
+            }
+
+            // jumbled xor stuffs
+            display[y_coord * config.SCREEN_WIDTH + x_coord] ^= (sprite_data & (1 << j));
+
+            // Stop drawing if on right edge of screen
+            if (++x_coord >= config.SCREEN_WIDTH) break;
+
+          }
+
+          // Stop drawing if sprite hits bottom edge of screen
+            if (++y_coord >= config.SCREEN_HEIGHT) break;
+        }
+        break;
+      }
+
+
+      default:
+        std::cout << "Not yet implemented" << std::endl;
+        break;
+
+    }
   }
 };
 
@@ -242,7 +344,7 @@ int main(int argc, char **argv) {
   while (chip8.state != QUIT) {
     chip8.handle_input();
 
-    
+    chip8.run_instruction(config);
 
 
 
