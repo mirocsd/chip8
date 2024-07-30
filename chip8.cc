@@ -23,7 +23,7 @@ struct config_obj {
   uint8_t BG_G;
   uint8_t BG_B;
   uint8_t BG_A;
-  uint32_t scale;
+  int scale;
 
   config_obj() {
     // Screen width and height
@@ -38,51 +38,8 @@ struct config_obj {
     BG_G = 0x00;
     BG_B = 0x00;
     BG_A = 0x00;
-    scale = 20;
+    scale = 10;
   }
-};
-
-class sdl_obj {
- public:
-  SDL_Window *win;
-  SDL_Texture *tex;
-  SDL_Renderer *rend;
-
-  // ctor just runs the initialization function
-  sdl_obj() {
-    if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
-      std::cout << "Error initializing SDL: " << SDL_GetError() << std::endl;
-    }
-  }
-
-  // "Initialize" SDL (create window and renderer)
-  void initialize(config_obj config) {
-    this->win = SDL_CreateWindow("CHIP8", SDL_WINDOWPOS_CENTERED,
-                                 SDL_WINDOWPOS_CENTERED,
-                                 config.SCREEN_WIDTH * config.scale,
-                                 config.SCREEN_HEIGHT * config.scale, 0);
-
-    this->rend = SDL_CreateRenderer(this->win, -1, SDL_RENDERER_ACCELERATED);
-  }
-
-  void reset_screen(config_obj config) {
-    SDL_SetRenderDrawColor(rend, config.BG_R, config.BG_G, config.BG_B,
-                           config.BG_A);
-    // Clear the screen
-    SDL_RenderClear(rend);
-  }
-
-  void update_screen() { SDL_RenderPresent(rend); }
-
-  // Perform exit cleanup
-  void exit_cleanup() {
-    SDL_DestroyTexture(tex);
-    SDL_DestroyRenderer(rend);
-    SDL_DestroyWindow(win);
-    SDL_Quit();
-  }
-
-  ~sdl_obj() { exit_cleanup(); }
 };
 
 enum emulator_state_t {
@@ -118,7 +75,7 @@ class chip8_obj {
   const uint32_t start_address = 0x200;
   chip8_obj() { state = RUNNING; }
 
-  void initialize(char rom_name[]) {
+  void initialize(char *rom_name) {
     const uint32_t start_address = 0x200;
     const uint8_t font[] = {
         0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -139,7 +96,7 @@ class chip8_obj {
         0xF0, 0x80, 0xF0, 0x80, 0x80  // F
     };
     PC = start_address;
-    *stack_ptr = stack[0];
+    stack_ptr = stack;
 
     // Load the font into memory
     std::memcpy(ram, font, sizeof(font));
@@ -156,7 +113,12 @@ class chip8_obj {
     if (rom_size > max_size) { SDL_Log("Rom file is too large"); }
 
     // Load ROM
-    fread(ram + start_address, rom_size, 1, rom);
+    size_t read_size = fread(ram + start_address, 1, rom_size, rom);
+    if (read_size != rom_size) {
+      SDL_Log("Read size is not the same as ROM file size\n");
+      fclose(rom);
+      return;
+    }
     fclose(rom);
   }
 
@@ -198,23 +160,38 @@ class chip8_obj {
   }
 
   void run_instruction(config_obj config) {
+    std::cout << "Current PC: " << PC << std::endl;
+    std::cout << "ram[PC] << 8 -- " << std::hex << (ram[PC] << 8) << " ram[PC+1] -- " << std::hex << ram[PC+1] << std::endl;
     inst.opcode = (ram[PC] << 8) | ram[PC+1]; 
     PC += 2;
+    std::cout << "PC now: " << PC << std::endl;
+    std::cout << "Current opcode: " << std::hex << inst.opcode << std::endl;
     
     inst.nnn = inst.opcode & 0x0FFF;
-    inst.kk = inst.opcode & 0x0FF;
-    inst.n = inst.opcode & 0x0F;
-    inst.x = (inst.opcode >> 8) & 0x0F;
-    inst.y = (inst.opcode >> 4) & 0x0F;
-    switch ((inst.opcode >> 12) & 0x0F) {
+    inst.kk = inst.opcode & 0x00FF;
+    std::cout << "inst.kk before switch: " << inst.kk << std::endl;
+    inst.n = inst.opcode & 0x000F;
+    inst.x = (inst.opcode >> 8) & 0x000F;
+    inst.y = (inst.opcode >> 4) & 0x000F;
+
+    std::cout << "Decoded Instruction: nnn=" << std::hex << inst.nnn 
+              << ", kk=" << std::hex << static_cast<int>(inst.kk)
+              << ", n=" << std::hex << static_cast<int>(inst.n)
+              << ", x=" << std::hex << static_cast<int>(inst.x)
+              << ", y=" << std::hex << static_cast<int>(inst.y) << std::endl;
+
+    switch ((inst.opcode >> 12) & 0x000F) {
       case 0x0:
         switch (inst.kk) {
           case 0xE0: // 0x00E0 - Clear the display
             memset(display, false, sizeof display);
+            break;
           case 0xEE: // 0x00EE - Return from a subroutine
             // Pop last address from stack, set PC to this (the RA)
             PC = *--stack_ptr;
+            break;
         }
+      break;
 
       case 0x01:
         PC = inst.nnn;
@@ -238,7 +215,9 @@ class chip8_obj {
         break;
 
       case 0x06: // Set Vx = kk
+        std::cout << "-> Setting Vx\n" << "inst.x = " << static_cast<int>(inst.x) << " inst.kk = " << static_cast<int>(inst.kk) << std::endl;
         V[inst.x] = inst.kk;
+        std::cout << "Vx = " << std::dec << V[inst.x] << std::endl;
         break;
 
       case 0x07: // Set Vx = Vx + kk
@@ -261,27 +240,33 @@ class chip8_obj {
 
 
         }
+      break;
 
       case 0x0A: // 0xAnnn - Set register I to nnn
         I = inst.nnn;
+        std::cout << "Index is now: " << I << std::endl;
         break;
 
       case 0x0D: // 0xDxyn - Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision
       {
+        std::cout << "Vx: " << V[inst.x] << std::endl;
         uint8_t x_coord = V[inst.x] % config.SCREEN_WIDTH; 
+        std::cout << "Vy: " << V[inst.y] << std::endl;
         uint8_t y_coord = V[inst.y] % config.SCREEN_HEIGHT;
+        std::cout << "x coord: " << x_coord << "y_coord: " << y_coord << std::endl;
         V[0xF] = 0; // Set flag to 0
         
         // For all n rows of the sprite
         for (uint8_t i = 0; i < inst.n; i++) {
           const uint8_t sprite_data = ram[I + i]; // Get next byte of sprite data
           
-          for (int8_t j = 7; j <= 0; j--) {
+          for (int8_t j = 7; j >= 0; j--) {
             if ((sprite_data & (1 << j)) && display[y_coord * config.SCREEN_WIDTH + x_coord]) {
               V[0xF] = 1; // Set the carry flag since sprite pixel and display pixel both on
             }
 
             // jumbled xor stuffs
+            std::cout << " pixel " << std::endl;
             display[y_coord * config.SCREEN_WIDTH + x_coord] ^= (sprite_data & (1 << j));
 
             // Stop drawing if on right edge of screen
@@ -303,6 +288,71 @@ class chip8_obj {
     }
   }
 };
+
+class sdl_obj {
+ public:
+  SDL_Window *win;
+  SDL_Texture *tex;
+  SDL_Renderer *rend;
+
+  // ctor just runs the initialization function
+  sdl_obj() {
+    if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
+      std::cout << "Error initializing SDL: " << SDL_GetError() << std::endl;
+    }
+  }
+
+  // "Initialize" SDL (create window and renderer)
+  void initialize(config_obj config) {
+    std::cout << "Initializing...." << std::endl;
+    win = SDL_CreateWindow("CHIP8", SDL_WINDOWPOS_CENTERED,
+                                 SDL_WINDOWPOS_CENTERED,
+                                 config.SCREEN_WIDTH * config.scale,
+                                 config.SCREEN_HEIGHT * config.scale, 0);
+    
+    rend = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+  }
+
+  void reset_screen(config_obj config) {
+    SDL_SetRenderDrawColor(rend, config.BG_R, config.BG_G, config.BG_B,
+                           config.BG_A);
+    // Clear the screen
+    SDL_RenderClear(rend);
+  }
+
+  void update_screen(const chip8_obj chip8, const config_obj config) {
+    SDL_Rect rect = {.x = 0, .y = 0, .w = config.scale, .h = config.scale };
+
+
+    for (uint32_t i = 0; i < sizeof chip8.display; i++) {
+      // Loop thru all pixels
+      // x values are i % width, y values are i / width
+      rect.x = (i % config.SCREEN_WIDTH) * config.scale;
+      rect.y = (i / config.SCREEN_WIDTH) * config.scale;
+
+      if (chip8.display[i]) {
+        SDL_SetRenderDrawColor(rend, config.FG_R, config.FG_B, config.FG_G, config.FG_A);
+        SDL_RenderFillRect(rend, &rect);
+      } else {
+        SDL_SetRenderDrawColor(rend, config.BG_R, config.BG_B, config.BG_G, config.BG_A);
+        SDL_RenderFillRect(rend, &rect);
+      }
+    }
+    SDL_RenderPresent(rend); 
+
+  }
+
+  // Perform exit cleanup
+  void exit_cleanup() {
+    SDL_DestroyTexture(tex);
+    SDL_DestroyRenderer(rend);
+    SDL_DestroyWindow(win);
+    SDL_Quit();
+  }
+
+  ~sdl_obj() { exit_cleanup(); }
+};
+
 
 void handle_extern_signal(int signal) {
   if (signal == SIGINT || signal == SIGTERM || signal == SIGTSTP) {
@@ -337,22 +387,25 @@ int main(int argc, char **argv) {
   }
 
   char *rom_name = argv[1];
+  std::cout << "Rom name: " << rom_name << std::endl;
   chip8.initialize(rom_name);
-
+  std::cout << "Starting address of chip8: " << chip8.PC << std::endl;
+  std::cout << "About to reset screen" << std::endl;
   sdl.reset_screen(config);
+  std::cout << "Screen reset" << std::endl;
   // Main loop
   while (chip8.state != QUIT) {
     chip8.handle_input();
-
+    std::cout << "About to run..." << std::endl;
     chip8.run_instruction(config);
-
+    std::cout << "Instruction ran" << std::endl;
 
 
     // Delays for 60Hz, should compensate for time spent executing CHIP8
     // instructions as well
     SDL_Delay(1000 / 60);
 
-    sdl.update_screen();
+    sdl.update_screen(chip8, config);
   }
 
   sdl.exit_cleanup();
