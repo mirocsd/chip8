@@ -73,10 +73,20 @@ class chip8_obj {
   instruction inst;      // Current instruction
 
   const uint32_t start_address = 0x200;
-  chip8_obj() { state = RUNNING; }
+  chip8_obj() { 
+    state = RUNNING;
+    PC = start_address;
+    stack_ptr = stack;
+    memset(ram, 0, sizeof(ram));
+    memset(display, false, sizeof(display));
+    memset(V, 0, sizeof(V));
+    I = 0;
+    delay_timer = 0;
+    sound_timer = 0;
+    memset(keypad, false, sizeof(keypad)); 
+  }
 
   void initialize(char *rom_name) {
-    const uint32_t start_address = 0x200;
     const uint8_t font[] = {
         0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
         0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -99,12 +109,15 @@ class chip8_obj {
     stack_ptr = stack;
 
     // Load the font into memory
-    std::memcpy(ram, font, sizeof(font));
+    std::memcpy(ram + 0x50, font, sizeof(font));
 
     this->rom_name = rom_name;
     // Open ROM
     FILE *rom = fopen(rom_name, "rb");
-    if (!rom) { SDL_Log("Could not open rom file %s\n", rom_name); }
+    if (!rom) { 
+      SDL_Log("Could not open rom file %s\n", rom_name); 
+      return;
+    }
 
     const size_t rom_size = std::filesystem::file_size(rom_name);
     const size_t max_size = sizeof ram - start_address;
@@ -207,7 +220,14 @@ class chip8_obj {
         break;
 
       case 0x04: // 0x4xkk - Skip next instruction if Vx != kk
-        if (V[inst.x] != inst.kk) { PC += 2; }
+        std::cout << "Executing 0x4xkk - Skip next instruction if Vx != kk" << std::endl;
+        std::cout << "V[" << std::hex << static_cast<int>(inst.x) << "] = " << std::hex << static_cast<int>(V[inst.x]) << std::endl;
+        std::cout << "kk = " << std::hex << static_cast<int>(inst.kk) << std::endl;
+        if (V[inst.x] != inst.kk) {
+            std::cout << "Skipping next instruction, current PC: " << std::hex << PC << std::endl;
+            PC += 2;
+            std::cout << "New PC after skipping: " << std::hex << PC << std::endl;
+        }
         break;
 
       case 0x05: // 0x5xy0 - Skip next instruction if Vx = Vy
@@ -221,7 +241,7 @@ class chip8_obj {
         break;
 
       case 0x07: // Set Vx = Vx + kk
-        V[inst.x] = inst.x + inst.kk;
+        V[inst.x] += inst.kk;
         break;
 
       case 0x08:
@@ -249,36 +269,26 @@ class chip8_obj {
 
       case 0x0D: // 0xDxyn - Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision
       {
-        std::cout << "Vx: " << V[inst.x] << std::endl;
-        uint8_t x_coord = V[inst.x] % config.SCREEN_WIDTH; 
-        std::cout << "Vy: " << V[inst.y] << std::endl;
-        uint8_t y_coord = V[inst.y] % config.SCREEN_HEIGHT;
-        std::cout << "x coord: " << x_coord << "y_coord: " << y_coord << std::endl;
-        V[0xF] = 0; // Set flag to 0
-        
-        // For all n rows of the sprite
-        for (uint8_t i = 0; i < inst.n; i++) {
-          const uint8_t sprite_data = ram[I + i]; // Get next byte of sprite data
-          
-          for (int8_t j = 7; j >= 0; j--) {
-            if ((sprite_data & (1 << j)) && display[y_coord * config.SCREEN_WIDTH + x_coord]) {
-              V[0xF] = 1; // Set the carry flag since sprite pixel and display pixel both on
+        uint8_t x = V[inst.x];
+        uint8_t y = V[inst.y];
+        uint8_t height = inst.n;
+        V[0xF] = 0;
+        for (uint8_t row = 0; row < height; ++row) {
+          uint8_t sprite_byte = ram[I + row];
+          for (uint8_t col = 0; col < 8; ++col) {
+            uint8_t sprite_pixel = sprite_byte & (0x80 >> col);
+            uint32_t display_index = (x + col + ((y + row) * config.SCREEN_WIDTH)) % (config.SCREEN_WIDTH * config.SCREEN_HEIGHT);
+            bool *display_pixel = &display[display_index];
+            if (sprite_pixel) {
+                if (*display_pixel) {
+                    V[0xF] = 1;
+                }
+                *display_pixel ^= 1;
             }
-
-            // jumbled xor stuffs
-            std::cout << " pixel " << std::endl;
-            display[y_coord * config.SCREEN_WIDTH + x_coord] ^= (sprite_data & (1 << j));
-
-            // Stop drawing if on right edge of screen
-            if (++x_coord >= config.SCREEN_WIDTH) break;
-
           }
-
-          // Stop drawing if sprite hits bottom edge of screen
-            if (++y_coord >= config.SCREEN_HEIGHT) break;
         }
-        break;
       }
+      break;
 
 
       default:
