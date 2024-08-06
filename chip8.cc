@@ -4,6 +4,9 @@
 #include <filesystem>
 #include <iostream>
 
+// for random number generation
+#include <random>
+
 // for signal handling
 #include <signal.h>
 
@@ -51,10 +54,12 @@ enum emulator_state_t {
 struct instruction {
   uint16_t opcode;
   uint16_t nnn; // constant - last 12 bits - *nnn
-  uint8_t kk;   // constant - last 8 bits  - **kk 
+  uint8_t kk;   // constant - last 8 bits  - **kk
   uint8_t n;    // constant - last 4 bits  - ***n
-  uint8_t x;    // lower 4 bits of high byte of instruction - *x** - register identifier
-  uint8_t y;    // upper 4 bits of low byte of instruction  - **y* - register identifier
+  uint8_t x;    // lower 4 bits of high byte of instruction - *x** - register
+                // identifier
+  uint8_t y;    // upper 4 bits of low byte of instruction  - **y* - register
+                // identifier
 };
 class chip8_obj {
  public:
@@ -63,17 +68,17 @@ class chip8_obj {
   bool display[64 * 32]; // Display array
   uint16_t stack[12];    // Subroutine stack
   uint16_t *stack_ptr;
-  uint8_t V[16];         // Registers V0-VF
-  uint16_t I;            // Index register
+  uint8_t V[16]; // Registers V0-VF
+  uint16_t I;    // Index register
   uint16_t PC;
   uint8_t delay_timer;
-  uint8_t sound_timer;   // Beeps when nonzero
-  bool keypad[16];       // Hex keypad
-  char *rom_name;        // Current ROM
-  instruction inst;      // Current instruction
+  uint8_t sound_timer; // Beeps when nonzero
+  bool keypad[16];     // Hex keypad
+  char *rom_name;      // Current ROM
+  instruction inst;    // Current instruction
 
   const uint32_t start_address = 0x200;
-  chip8_obj() { 
+  chip8_obj() {
     state = RUNNING;
     PC = start_address;
     stack_ptr = stack;
@@ -83,7 +88,7 @@ class chip8_obj {
     I = 0;
     delay_timer = 0;
     sound_timer = 0;
-    memset(keypad, false, sizeof(keypad)); 
+    memset(keypad, false, sizeof(keypad));
   }
 
   void initialize(char *rom_name) {
@@ -114,8 +119,8 @@ class chip8_obj {
     this->rom_name = rom_name;
     // Open ROM
     FILE *rom = fopen(rom_name, "rb");
-    if (!rom) { 
-      SDL_Log("Could not open rom file %s\n", rom_name); 
+    if (!rom) {
+      SDL_Log("Could not open rom file %s\n", rom_name);
       return;
     }
 
@@ -174,12 +179,13 @@ class chip8_obj {
 
   void run_instruction(config_obj config) {
     std::cout << "Current PC: " << PC << std::endl;
-    std::cout << "ram[PC] << 8 -- " << std::hex << (ram[PC] << 8) << " ram[PC+1] -- " << std::hex << ram[PC+1] << std::endl;
-    inst.opcode = (ram[PC] << 8) | ram[PC+1]; 
+    std::cout << "ram[PC] << 8 -- " << std::hex << (ram[PC] << 8)
+              << " ram[PC+1] -- " << std::hex << ram[PC + 1] << std::endl;
+    inst.opcode = (ram[PC] << 8) | ram[PC + 1];
     PC += 2;
     std::cout << "PC now: " << PC << std::endl;
     std::cout << "Current opcode: " << std::hex << inst.opcode << std::endl;
-    
+
     inst.nnn = inst.opcode & 0x0FFF;
     inst.kk = inst.opcode & 0x00FF;
     std::cout << "inst.kk before switch: " << inst.kk << std::endl;
@@ -187,114 +193,203 @@ class chip8_obj {
     inst.x = (inst.opcode >> 8) & 0x000F;
     inst.y = (inst.opcode >> 4) & 0x000F;
 
-    std::cout << "Decoded Instruction: nnn=" << std::hex << inst.nnn 
+    std::cout << "Decoded Instruction: nnn=" << std::hex << inst.nnn
               << ", kk=" << std::hex << static_cast<int>(inst.kk)
               << ", n=" << std::hex << static_cast<int>(inst.n)
               << ", x=" << std::hex << static_cast<int>(inst.x)
               << ", y=" << std::hex << static_cast<int>(inst.y) << std::endl;
 
     switch ((inst.opcode >> 12) & 0x000F) {
-      case 0x0:
-        switch (inst.kk) {
-          case 0xE0: // 0x00E0 - Clear the display
-            memset(display, false, sizeof display);
-            break;
-          case 0xEE: // 0x00EE - Return from a subroutine
-            // Pop last address from stack, set PC to this (the RA)
-            PC = *--stack_ptr;
-            break;
-        }
-      break;
-
-      case 0x01:
-        PC = inst.nnn;
+    case 0x0:
+      switch (inst.kk) {
+      case 0xE0: // 0x00E0 - Clear the display
+        memset(display, false, sizeof display);
         break;
-
-      case 0x02: // 0x2nnn - Call subroutine at nnn
-        *stack_ptr++ = PC; // Store the current (return) address on top of stack
-        PC = inst.nnn; // PC will be at nnn for start of subroutine
+      case 0xEE: // 0x00EE - Return from a subroutine
+        // Pop last address from stack, set PC to this (the RA)
+        PC = *--stack_ptr;
         break;
-      
-      case 0x03: // 0x3xkk - Skip next instruction if Vx = kk
-        if (V[inst.x] == inst.kk) { PC += 2; }
-        break;
-
-      case 0x04: // 0x4xkk - Skip next instruction if Vx != kk
-        std::cout << "Executing 0x4xkk - Skip next instruction if Vx != kk" << std::endl;
-        std::cout << "V[" << std::hex << static_cast<int>(inst.x) << "] = " << std::hex << static_cast<int>(V[inst.x]) << std::endl;
-        std::cout << "kk = " << std::hex << static_cast<int>(inst.kk) << std::endl;
-        if (V[inst.x] != inst.kk) {
-            std::cout << "Skipping next instruction, current PC: " << std::hex << PC << std::endl;
-            PC += 2;
-            std::cout << "New PC after skipping: " << std::hex << PC << std::endl;
-        }
-        break;
-
-      case 0x05: // 0x5xy0 - Skip next instruction if Vx = Vy
-        if (V[inst.x] == V[inst.y]) { PC += 2; }
-        break;
-
-      case 0x06: // Set Vx = kk
-        std::cout << "-> Setting Vx\n" << "inst.x = " << static_cast<int>(inst.x) << " inst.kk = " << static_cast<int>(inst.kk) << std::endl;
-        V[inst.x] = inst.kk;
-        std::cout << "Vx = " << std::dec << V[inst.x] << std::endl;
-        break;
-
-      case 0x07: // Set Vx = Vx + kk
-        V[inst.x] += inst.kk;
-        break;
-
-      case 0x08:
-        switch (inst.n) {
-          case 0x00: // 0x8xy0 - Set Vx = Vy
-            V[inst.x] = V[inst.y];
-            break;
-          
-          case 0x01: // 0x8xy1 - Set Vx = Vx OR Vy
-            V[inst.x] = V[inst.x] | V[inst.y];
-            break;
-
-          case 0x02: // 0x8xy2 - Set Vx = Vx AND Vy
-            V[inst.x] = V[inst.x] & V[inst.y];
-            break;
-
-
-        }
-      break;
-
-      case 0x0A: // 0xAnnn - Set register I to nnn
-        I = inst.nnn;
-        std::cout << "Index is now: " << I << std::endl;
-        break;
-
-      case 0x0D: // 0xDxyn - Display n-byte sprite starting at memory location I at (Vx, Vy), set VF = collision
-      {
-        uint8_t x = V[inst.x];
-        uint8_t y = V[inst.y];
-        uint8_t height = inst.n;
-        V[0xF] = 0;
-        for (uint8_t row = 0; row < height; ++row) {
-          uint8_t sprite_byte = ram[I + row];
-          for (uint8_t col = 0; col < 8; ++col) {
-            uint8_t sprite_pixel = sprite_byte & (0x80 >> col);
-            uint32_t display_index = (x + col + ((y + row) * config.SCREEN_WIDTH)) % (config.SCREEN_WIDTH * config.SCREEN_HEIGHT);
-            bool *display_pixel = &display[display_index];
-            if (sprite_pixel) {
-                if (*display_pixel) {
-                    V[0xF] = 1;
-                }
-                *display_pixel ^= 1;
-            }
-          }
-        }
       }
       break;
 
+    case 0x01: // 0x1nnn - Jump to address nnn (set PC to nnn)
+      PC = inst.nnn;
+      break;
 
-      default:
-        std::cout << "Not yet implemented" << std::endl;
+    case 0x02:           // 0x2nnn - Call subroutine at nnn
+      *stack_ptr++ = PC; // Store the current (return) address on top of stack
+      PC = inst.nnn;     // PC will be at nnn for start of subroutine
+      break;
+
+    case 0x03: // 0x3xkk - Skip next instruction if Vx = kk
+      if (V[inst.x] == inst.kk) { PC += 2; }
+      break;
+
+    case 0x04: // 0x4xkk - Skip next instruction if Vx != kk
+      std::cout << "Executing 0x4xkk - Skip next instruction if Vx != kk"
+                << std::endl;
+      std::cout << "V[" << std::hex << static_cast<int>(inst.x)
+                << "] = " << std::hex << static_cast<int>(V[inst.x])
+                << std::endl;
+      std::cout << "kk = " << std::hex << static_cast<int>(inst.kk)
+                << std::endl;
+      if (V[inst.x] != inst.kk) {
+        std::cout << "Skipping next instruction, current PC: " << std::hex << PC
+                  << std::endl;
+        PC += 2;
+        std::cout << "New PC after skipping: " << std::hex << PC << std::endl;
+      }
+      break;
+
+    case 0x05: // 0x5xy0 - Skip next instruction if Vx = Vy
+      if (V[inst.x] == V[inst.y]) { PC += 2; }
+      break;
+
+    case 0x06: // Set Vx = kk
+      std::cout << "-> Setting Vx\n"
+                << "inst.x = " << static_cast<int>(inst.x)
+                << " inst.kk = " << static_cast<int>(inst.kk) << std::endl;
+      V[inst.x] = inst.kk;
+      std::cout << "Vx = " << std::dec << V[inst.x] << std::endl;
+      break;
+
+    case 0x07: // Set Vx = Vx + kk
+      V[inst.x] += inst.kk;
+      break;
+
+    case 0x08:
+      switch (inst.n) {
+      case 0x00: // 0x8xy0 - Set Vx = Vy
+        V[inst.x] = V[inst.y];
         break;
 
+      case 0x01: // 0x8xy1 - Set Vx = Vx OR Vy
+        V[inst.x] = V[inst.x] | V[inst.y];
+        break;
+
+      case 0x02: // 0x8xy2 - Set Vx = Vx AND Vy
+        V[inst.x] = V[inst.x] & V[inst.y];
+        break;
+
+      case 0x03: // 0x8xy3 - Set Vx = Vx XOR Vy
+        V[inst.x] ^= V[inst.y];
+        break;
+
+      case 0x04: // 0x8xy4 - Set Vx = Vx + Vy, set VF = carry
+        V[inst.x] += V[inst.y];
+        if (V[inst.x] > 255) {
+          V[inst.x] = V[inst.x] & 0xFF;
+          V[0xF] = 1;
+        } else {
+          V[0xF] = 0;
+        }
+        break;
+
+      case 0x05: // 0x8xy5 - Set Vx = Vx - Vy, set VF = NOT borrow
+        if (V[inst.x] > V[inst.y]) {
+          V[0xF] = 1;
+        } else {
+          V[0xF] = 0;
+        }
+
+        V[inst.x] -= V[inst.y];
+        break;
+
+      case 0x06: // 0x8xy6 - Set Vx = Vx SHR 1
+        if (V[inst.x] & 0x1) {
+          V[0xF] = 1;
+        } else {
+          V[0xF] = 0;
+        }
+
+        V[inst.x] /= 2;
+        break;
+
+      case 0x07: // 0x8xy7 - Set Vx = Vy - Vx, set VF = NOT borrow
+        if (V[inst.y] > V[inst.x]) {
+          V[0xF] = 1;
+        } else {
+          V[0xF] = 0;
+        }
+
+        V[inst.x] = V[inst.y] - V[inst.x];
+        break;
+
+      case 0x0E: // 0x8xy# - Set Vx = Vx SHL 1
+        if (V[inst.x] >> 7) {
+          V[0xF] = 1;
+        } else {
+          V[0xF] = 0;
+        }
+
+        V[inst.x] *= 2;
+        break;
+      }
+      break;
+
+    case 0x09: // 0x9xy0 - Skip next instruction if Vx != Vy
+      if (V[inst.x] != V[inst.y]) { PC += 2; }
+      break;
+
+    case 0x0A: // 0xAnnn - Set register I to nnn
+      I = inst.nnn;
+      std::cout << "Index is now: " << I << std::endl;
+      break;
+
+    case 0x0B: // 0xBnnn - Jump to location nnn + V0
+      PC = inst.nnn + V[0];
+      break;
+
+    case 0x0C: // 0xCxkk - Set Vx = random byte AND kk
+    {
+      std::ranlux48 gen;
+      std::uniform_int_distribution<int> rand_byte(0, 255);
+      V[inst.x] = rand_byte(gen) & inst.kk;
+    } break;
+
+    case 0x0D: // 0xDxyn - Display n-byte sprite starting at memory location I
+               // at (Vx, Vy), set VF = collision
+    {
+      uint8_t x = V[inst.x];
+      uint8_t y = V[inst.y];
+      uint8_t height = inst.n;
+      V[0xF] = 0;
+      for (uint8_t row = 0; row < height; ++row) {
+        uint8_t sprite_byte = ram[I + row];
+        for (uint8_t col = 0; col < 8; ++col) {
+          uint8_t sprite_pixel = sprite_byte & (0x80 >> col);
+          uint32_t display_index =
+              (x + col + ((y + row) * config.SCREEN_WIDTH)) %
+              (config.SCREEN_WIDTH * config.SCREEN_HEIGHT);
+          bool *display_pixel = &display[display_index];
+          if (sprite_pixel) {
+            if (*display_pixel) { V[0xF] = 1; }
+            *display_pixel ^= 1;
+          }
+        }
+      }
+    } break;
+
+    case 0x0E:
+      switch (inst.kk) {
+      case 0x9E: // 0xEx9E - Skip next instruction if key with the value of Vx
+                 // is pressed
+        if (keypad[V[inst.x]]) {
+          PC += 2;
+        }
+        break;
+
+      case 0xA1: // 0xExA1 - Skip next instruction if key with value of Vx is
+                 // not pressed
+        if (!keypad[V[inst.x]]) {
+          PC += 2;
+        }
+        break;
+      }
+      break;
+    default:
+      std::cout << "Not yet implemented" << std::endl;
+      break;
     }
   }
 };
@@ -316,10 +411,10 @@ class sdl_obj {
   void initialize(config_obj config) {
     std::cout << "Initializing...." << std::endl;
     win = SDL_CreateWindow("CHIP8", SDL_WINDOWPOS_CENTERED,
-                                 SDL_WINDOWPOS_CENTERED,
-                                 config.SCREEN_WIDTH * config.scale,
-                                 config.SCREEN_HEIGHT * config.scale, 0);
-    
+                           SDL_WINDOWPOS_CENTERED,
+                           config.SCREEN_WIDTH * config.scale,
+                           config.SCREEN_HEIGHT * config.scale, 0);
+
     rend = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
   }
 
@@ -331,8 +426,7 @@ class sdl_obj {
   }
 
   void update_screen(const chip8_obj chip8, const config_obj config) {
-    SDL_Rect rect = {.x = 0, .y = 0, .w = config.scale, .h = config.scale };
-
+    SDL_Rect rect = {.x = 0, .y = 0, .w = config.scale, .h = config.scale};
 
     for (uint32_t i = 0; i < sizeof chip8.display; i++) {
       // Loop thru all pixels
@@ -341,15 +435,22 @@ class sdl_obj {
       rect.y = (i / config.SCREEN_WIDTH) * config.scale;
 
       if (chip8.display[i]) {
-        SDL_SetRenderDrawColor(rend, config.FG_R, config.FG_B, config.FG_G, config.FG_A);
+        // Draw pixel
+        SDL_SetRenderDrawColor(rend, config.FG_R, config.FG_B, config.FG_G,
+                               config.FG_A);
         SDL_RenderFillRect(rend, &rect);
+
+        // Draw pixel outline with BG color
+        SDL_SetRenderDrawColor(rend, config.BG_R, config.BG_B, config.BG_G,
+                               config.BG_A);
+        SDL_RenderDrawRect(rend, &rect);
       } else {
-        SDL_SetRenderDrawColor(rend, config.BG_R, config.BG_B, config.BG_G, config.BG_A);
+        SDL_SetRenderDrawColor(rend, config.BG_R, config.BG_B, config.BG_G,
+                               config.BG_A);
         SDL_RenderFillRect(rend, &rect);
       }
     }
-    SDL_RenderPresent(rend); 
-
+    SDL_RenderPresent(rend);
   }
 
   // Perform exit cleanup
@@ -362,7 +463,6 @@ class sdl_obj {
 
   ~sdl_obj() { exit_cleanup(); }
 };
-
 
 void handle_extern_signal(int signal) {
   if (signal == SIGINT || signal == SIGTERM || signal == SIGTSTP) {
@@ -379,7 +479,7 @@ void init_sighandle(void) {
   signal(SIGTSTP, handle_extern_signal);
 }
 
-int main(int argc, char **argv) { 
+int main(int argc, char **argv) {
   init_sighandle();
 
   // Init configuration
@@ -409,7 +509,6 @@ int main(int argc, char **argv) {
     std::cout << "About to run..." << std::endl;
     chip8.run_instruction(config);
     std::cout << "Instruction ran" << std::endl;
-
 
     // Delays for 60Hz, should compensate for time spent executing CHIP8
     // instructions as well
