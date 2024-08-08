@@ -41,7 +41,7 @@ struct config_obj {
     BG_G = 0x00;
     BG_B = 0x00;
     BG_A = 0x00;
-    scale = 10;
+    scale = 20;
   }
 };
 
@@ -163,12 +163,114 @@ class chip8_obj {
             state = RUNNING;
           }
 
+        // Map the keyboard keys to the keypad (1234 qwer asdf zxcv)
+        case SDLK_1:
+          keypad[0x1] = true;
+          break;
+        case SDLK_2:
+          keypad[0x2] = true;
+          break;
+        case SDLK_3:
+          keypad[0x3] = true;
+          break;
+        case SDLK_4:
+          keypad[0xC] = true;
+          break;
+        case SDLK_q:
+          keypad[0x4] = true;
+          break;
+        case SDLK_w:
+          keypad[0x5] = true;
+          break;
+        case SDLK_e:
+          keypad[0x6] = true;
+          break;
+        case SDLK_r:
+          keypad[0xD] = true;
+          break;
+        case SDLK_a:
+          keypad[0x7] = true;
+          break;
+        case SDLK_s:
+          keypad[0x8] = true;
+          break;
+        case SDLK_d:
+          keypad[0x9] = true;
+          break;
+        case SDLK_f:
+          keypad[0xE] = true;
+          break;
+        case SDLK_z:
+          keypad[0xA] = true;
+          break;
+        case SDLK_x:
+          keypad[0x0] = true;
+          break;
+        case SDLK_c:
+          keypad[0xB] = true;
+          break;
+        case SDLK_v:
+          keypad[0xF] = true;
+          break;
+
         default:
           break;
         }
         break;
 
       case SDL_KEYUP:
+        switch (event.key.keysym.sym) {
+        case SDLK_1:
+          keypad[0x1] = false;
+          break;
+        case SDLK_2:
+          keypad[0x2] = false;
+          break;
+        case SDLK_3:
+          keypad[0x3] = false;
+          break;
+        case SDLK_4:
+          keypad[0xC] = false;
+          break;
+        case SDLK_q:
+          keypad[0x4] = false;
+          break;
+        case SDLK_w:
+          keypad[0x5] = false;
+          break;
+        case SDLK_e:
+          keypad[0x6] = false;
+          break;
+        case SDLK_r:
+          keypad[0xD] = false;
+          break;
+        case SDLK_a:
+          keypad[0x7] = false;
+          break;
+        case SDLK_s:
+          keypad[0x8] = false;
+          break;
+        case SDLK_d:
+          keypad[0x9] = false;
+          break;
+        case SDLK_f:
+          keypad[0xE] = false;
+          break;
+        case SDLK_z:
+          keypad[0xA] = false;
+          break;
+        case SDLK_x:
+          keypad[0x0] = false;
+          break;
+        case SDLK_c:
+          keypad[0xB] = false;
+          break;
+        case SDLK_v:
+          keypad[0xF] = false;
+          break;
+        default:
+          break;
+        }
         break;
 
       default:
@@ -315,7 +417,7 @@ class chip8_obj {
         V[inst.x] = V[inst.y] - V[inst.x];
         break;
 
-      case 0x0E: // 0x8xy# - Set Vx = Vx SHL 1
+      case 0x0E: // 0x8xyE - Set Vx = Vx SHL 1
         if (V[inst.x] >> 7) {
           V[0xF] = 1;
         } else {
@@ -374,19 +476,81 @@ class chip8_obj {
       switch (inst.kk) {
       case 0x9E: // 0xEx9E - Skip next instruction if key with the value of Vx
                  // is pressed
-        if (keypad[V[inst.x]]) {
-          PC += 2;
-        }
+        if (keypad[V[inst.x]]) { PC += 2; }
         break;
 
       case 0xA1: // 0xExA1 - Skip next instruction if key with value of Vx is
                  // not pressed
-        if (!keypad[V[inst.x]]) {
-          PC += 2;
-        }
+        if (!keypad[V[inst.x]]) { PC += 2; }
         break;
       }
       break;
+
+    case 0x0F:
+      switch (inst.kk) {
+      case 0x07: // 0xFx07 - Set Vx = delay timer value
+        V[inst.x] = delay_timer;
+        break;
+
+      case 0x0A: // 0xFx0A - Wait for a key press, store the value of the key in
+                 // Vx
+        {
+        bool key_pressed = false;
+        for (uint8_t i = 0; i < sizeof(keypad); i++) {
+          if (keypad[i]) {
+            V[inst.x] = i;
+            key_pressed = true;
+            break;
+          }
+        }
+        // If a key wasn't pressed, we need to remain on this instruction,
+        // since we had pre-incremented earlier, we need to decrement now to
+        // remain on this instruction
+        if (!key_pressed) { PC -= 2; }
+        }
+      }
+
+    case 0x15: // 0xFx15 - Set delay timer = Vx
+      delay_timer = V[inst.x];
+      break;
+
+    case 0x18: // 0xFx18 - Set sound timer = Vx
+      sound_timer = V[inst.x];
+      break;
+
+    case 0x1E: // 0xFx1E - Set I = I + Vx
+      I += V[inst.x];
+      break;
+
+    case 0x29: // 0xFx29 - Set I = location of sprite for digit Vx
+      // The character's location in memory should be 0x50 + Vx * (5 bytes)
+      I = 0x50 + V[inst.x] * 5;
+
+    case 0x33: // 0xFx33 - Store BCD representation of Vx in memory locations I,
+               // I+1, and I+2
+    {
+      int bcd = V[inst.x];
+      ram[I+2] = bcd % 10;
+      bcd /= 10;
+      ram[I+1] = bcd % 10;
+      bcd /= 10;
+      ram[I] = bcd;
+      break;
+    }
+
+    case 0x55: // 0xFx55 - Store registers V0 through Vx in memory starting at location I
+      // For the super CHIP8, I shouldn't be incremented (opposite from CHIP8)
+      for (uint8_t i = 0; i <= inst.x;  i++) {
+        ram[I + i] = V[i];
+      }
+      break;
+
+    case 0x65: // 0xFx65 - Read registers V0 through Vx from memory starting at location I
+      for (uint8_t i = 0; i <= inst.x; i++) {
+        V[i] = ram[I + i];
+      }
+      break;
+
     default:
       std::cout << "Not yet implemented" << std::endl;
       break;
