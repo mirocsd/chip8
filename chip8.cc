@@ -508,52 +508,55 @@ class chip8_obj {
         // remain on this instruction
         if (!key_pressed) { PC -= 2; }
         }
+      break;
+
+      case 0x15: // 0xFx15 - Set delay timer = Vx
+        delay_timer = V[inst.x];
+        break;
+
+      case 0x18: // 0xFx18 - Set sound timer = Vx
+        sound_timer = V[inst.x];
+        break;
+
+      case 0x1E: // 0xFx1E - Set I = I + Vx
+        I += V[inst.x];
+        break;
+
+      case 0x29: // 0xFx29 - Set I = location of sprite for digit Vx
+        // The character's location in memory should be 0x50 + Vx * (5 bytes)
+        I = V[inst.x] * 5;
+        std::cout << "Byte at V[inst.x] * 5: " << ram[V[inst.x] * 5] << std::endl;
+        break;
+
+      case 0x33: // 0xFx33 - Store BCD representation of Vx in memory locations I,
+                // I+1, and I+2
+      {
+        int bcd = V[inst.x];
+        ram[I+2] = bcd % 10;
+        bcd /= 10;
+        ram[I+1] = bcd % 10;
+        bcd /= 10;
+        ram[I] = bcd;
+        break;
       }
 
-    case 0x15: // 0xFx15 - Set delay timer = Vx
-      delay_timer = V[inst.x];
-      break;
+      case 0x55: // 0xFx55 - Store registers V0 through Vx in memory starting at location I
+        // For the super CHIP8, I shouldn't be incremented (opposite from CHIP8)
+        for (uint8_t i = 0; i <= inst.x;  i++) {
+          ram[I + i] = V[i];
+        }
+        break;
 
-    case 0x18: // 0xFx18 - Set sound timer = Vx
-      sound_timer = V[inst.x];
-      break;
+      case 0x65: // 0xFx65 - Read registers V0 through Vx from memory starting at location I
+        for (uint8_t i = 0; i <= inst.x; i++) {
+          V[i] = ram[I + i];
+        }
+        break;
 
-    case 0x1E: // 0xFx1E - Set I = I + Vx
-      I += V[inst.x];
-      break;
-
-    case 0x29: // 0xFx29 - Set I = location of sprite for digit Vx
-      // The character's location in memory should be 0x50 + Vx * (5 bytes)
-      I = 0x50 + V[inst.x] * 5;
-
-    case 0x33: // 0xFx33 - Store BCD representation of Vx in memory locations I,
-               // I+1, and I+2
-    {
-      int bcd = V[inst.x];
-      ram[I+2] = bcd % 10;
-      bcd /= 10;
-      ram[I+1] = bcd % 10;
-      bcd /= 10;
-      ram[I] = bcd;
-      break;
-    }
-
-    case 0x55: // 0xFx55 - Store registers V0 through Vx in memory starting at location I
-      // For the super CHIP8, I shouldn't be incremented (opposite from CHIP8)
-      for (uint8_t i = 0; i <= inst.x;  i++) {
-        ram[I + i] = V[i];
+      default:
+        std::cout << "Not yet implemented" << std::endl;
+        break;
       }
-      break;
-
-    case 0x65: // 0xFx65 - Read registers V0 through Vx from memory starting at location I
-      for (uint8_t i = 0; i <= inst.x; i++) {
-        V[i] = ram[I + i];
-      }
-      break;
-
-    default:
-      std::cout << "Not yet implemented" << std::endl;
-      break;
     }
   }
 };
