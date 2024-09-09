@@ -15,6 +15,8 @@
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_timer.h>
 
+#define DEBUG
+
 struct config_obj {
   uint32_t SCREEN_WIDTH;
   uint32_t SCREEN_HEIGHT;
@@ -27,6 +29,9 @@ struct config_obj {
   uint8_t BG_B;
   uint8_t BG_A;
   int scale;
+  uint32_t clock_speed; // CPU clock speed / instructions per second
+  bool debug_enable;
+  bool step_enable;
 
   config_obj() {
     // Screen width and height
@@ -42,6 +47,7 @@ struct config_obj {
     BG_B = 0x00;
     BG_A = 0x00;
     scale = 20;
+    clock_speed = 700;
   }
 };
 
@@ -163,6 +169,17 @@ class chip8_obj {
             state = RUNNING;
           }
 
+        #ifdef DEBUG
+        case SDLK_p:
+          state = PAUSED;
+          break;
+
+        case SDLK_o:
+          state = RUNNING;
+          break;
+        
+        #endif // DEBUG
+
         // Map the keyboard keys to the keypad (1234 qwer asdf zxcv)
         case SDLK_1:
           keypad[0x1] = true;
@@ -280,26 +297,14 @@ class chip8_obj {
   }
 
   void run_instruction(config_obj config) {
-    std::cout << "Current PC: " << PC << std::endl;
-    std::cout << "ram[PC] << 8 -- " << std::hex << (ram[PC] << 8)
-              << " ram[PC+1] -- " << std::hex << ram[PC + 1] << std::endl;
     inst.opcode = (ram[PC] << 8) | ram[PC + 1];
     PC += 2;
-    std::cout << "PC now: " << PC << std::endl;
-    std::cout << "Current opcode: " << std::hex << inst.opcode << std::endl;
 
     inst.nnn = inst.opcode & 0x0FFF;
     inst.kk = inst.opcode & 0x00FF;
-    std::cout << "inst.kk before switch: " << inst.kk << std::endl;
     inst.n = inst.opcode & 0x000F;
     inst.x = (inst.opcode >> 8) & 0x000F;
     inst.y = (inst.opcode >> 4) & 0x000F;
-
-    std::cout << "Decoded Instruction: nnn=" << std::hex << inst.nnn
-              << ", kk=" << std::hex << static_cast<int>(inst.kk)
-              << ", n=" << std::hex << static_cast<int>(inst.n)
-              << ", x=" << std::hex << static_cast<int>(inst.x)
-              << ", y=" << std::hex << static_cast<int>(inst.y) << std::endl;
 
     switch ((inst.opcode >> 12) & 0x000F) {
     case 0x0:
@@ -328,18 +333,8 @@ class chip8_obj {
       break;
 
     case 0x04: // 0x4xkk - Skip next instruction if Vx != kk
-      std::cout << "Executing 0x4xkk - Skip next instruction if Vx != kk"
-                << std::endl;
-      std::cout << "V[" << std::hex << static_cast<int>(inst.x)
-                << "] = " << std::hex << static_cast<int>(V[inst.x])
-                << std::endl;
-      std::cout << "kk = " << std::hex << static_cast<int>(inst.kk)
-                << std::endl;
       if (V[inst.x] != inst.kk) {
-        std::cout << "Skipping next instruction, current PC: " << std::hex << PC
-                  << std::endl;
         PC += 2;
-        std::cout << "New PC after skipping: " << std::hex << PC << std::endl;
       }
       break;
 
@@ -347,15 +342,12 @@ class chip8_obj {
       if (V[inst.x] == V[inst.y]) { PC += 2; }
       break;
 
-    case 0x06: // Set Vx = kk
-      std::cout << "-> Setting Vx\n"
-                << "inst.x = " << static_cast<int>(inst.x)
-                << " inst.kk = " << static_cast<int>(inst.kk) << std::endl;
+    case 0x06: // 0x6xkk - Set Vx = kk
       V[inst.x] = inst.kk;
       std::cout << "Vx = " << std::dec << V[inst.x] << std::endl;
       break;
 
-    case 0x07: // Set Vx = Vx + kk
+    case 0x07: // 0x7xkk - Set Vx = Vx + kk
       V[inst.x] += inst.kk;
       break;
 
@@ -367,14 +359,17 @@ class chip8_obj {
 
       case 0x01: // 0x8xy1 - Set Vx = Vx OR Vy
         V[inst.x] = V[inst.x] | V[inst.y];
+        //V[0xF] = 0;
         break;
 
       case 0x02: // 0x8xy2 - Set Vx = Vx AND Vy
         V[inst.x] = V[inst.x] & V[inst.y];
+        //V[0xF] = 0;
         break;
 
       case 0x03: // 0x8xy3 - Set Vx = Vx XOR Vy
         V[inst.x] ^= V[inst.y];
+        //V[0xF] = 0;
         break;
 
       case 0x04: // 0x8xy4 - Set Vx = Vx + Vy, set VF = carry
@@ -435,7 +430,6 @@ class chip8_obj {
 
     case 0x0A: // 0xAnnn - Set register I to nnn
       I = inst.nnn;
-      std::cout << "Index is now: " << I << std::endl;
       break;
 
     case 0x0B: // 0xBnnn - Jump to location nnn + V0
@@ -452,8 +446,8 @@ class chip8_obj {
     case 0x0D: // 0xDxyn - Display n-byte sprite starting at memory location I
                // at (Vx, Vy), set VF = collision
     {
-      uint8_t x = V[inst.x];
-      uint8_t y = V[inst.y];
+      uint8_t x = V[inst.x] % config.SCREEN_WIDTH;
+      uint8_t y = V[inst.y] % config.SCREEN_HEIGHT;
       uint8_t height = inst.n;
       V[0xF] = 0;
       for (uint8_t row = 0; row < height; ++row) {
@@ -494,7 +488,7 @@ class chip8_obj {
 
       case 0x0A: // 0xFx0A - Wait for a key press, store the value of the key in
                  // Vx
-        {
+      {
         bool key_pressed = false;
         for (uint8_t i = 0; i < sizeof(keypad); i++) {
           if (keypad[i]) {
@@ -507,8 +501,7 @@ class chip8_obj {
         // since we had pre-incremented earlier, we need to decrement now to
         // remain on this instruction
         if (!key_pressed) { PC -= 2; }
-        }
-      break;
+      } break;
 
       case 0x15: // 0xFx15 - Set delay timer = Vx
         delay_timer = V[inst.x];
@@ -524,30 +517,33 @@ class chip8_obj {
 
       case 0x29: // 0xFx29 - Set I = location of sprite for digit Vx
         // The character's location in memory should be 0x50 + Vx * (5 bytes)
-        I = V[inst.x] * 5;
-        std::cout << "Byte at V[inst.x] * 5: " << ram[V[inst.x] * 5] << std::endl;
+        I = 0x50 + V[inst.x] * 5;
+        std::cout << "Byte at V[inst.x] * 5: " << ram[V[inst.x] * 5]
+                  << std::endl;
         break;
 
-      case 0x33: // 0xFx33 - Store BCD representation of Vx in memory locations I,
-                // I+1, and I+2
+      case 0x33: // 0xFx33 - Store BCD representation of Vx in memory locations
+                 // I, I+1, and I+2
       {
         int bcd = V[inst.x];
-        ram[I+2] = bcd % 10;
+        ram[I + 2] = bcd % 10;
         bcd /= 10;
-        ram[I+1] = bcd % 10;
+        ram[I + 1] = bcd % 10;
         bcd /= 10;
         ram[I] = bcd;
         break;
       }
 
-      case 0x55: // 0xFx55 - Store registers V0 through Vx in memory starting at location I
-        // For the super CHIP8, I shouldn't be incremented (opposite from CHIP8)
-        for (uint8_t i = 0; i <= inst.x;  i++) {
-          ram[I + i] = V[i];
+      case 0x55: // 0xFx55 - Store registers V0 through Vx in memory starting at
+                 // location I
+        // For the super CHIP8, I shouldn't be incremented (opposite for CHIP8)
+        for (uint8_t i = 0; i <= inst.x; i++) {
+          ram[I++] = V[i]; // For super CHIP8, ram[I + i]
         }
         break;
 
-      case 0x65: // 0xFx65 - Read registers V0 through Vx from memory starting at location I
+      case 0x65: // 0xFx65 - Read registers V0 through Vx from memory starting
+                 // at location I
         for (uint8_t i = 0; i <= inst.x; i++) {
           V[i] = ram[I + i];
         }
@@ -559,6 +555,209 @@ class chip8_obj {
       }
     }
   }
+
+  void update_timers() {
+    if (delay_timer > 0) { delay_timer--; }
+    if (sound_timer > 0) {
+      sound_timer--;
+      // play_sound();
+    } else {
+      // stop_sound();
+    }
+  }
+
+  void debug(config_obj config) {
+    std::cout << "PC now: " << PC << std::endl;
+
+    std::cout << "Decoded Instruction: nnn=" << std::hex << inst.nnn
+              << ", kk=" << std::hex << static_cast<int>(inst.kk)
+              << ", n=" << std::hex << static_cast<int>(inst.n)
+              << ", x=" << std::hex << static_cast<int>(inst.x)
+              << ", y=" << std::hex << static_cast<int>(inst.y) << std::endl;
+
+    inst.opcode = (ram[PC] << 8) | ram[PC + 1];
+    inst.nnn = inst.opcode & 0x0FFF;
+    inst.kk = inst.opcode & 0x00FF;
+    inst.n = inst.opcode & 0x000F;
+    inst.x = (inst.opcode >> 8) & 0x000F;
+    inst.y = (inst.opcode >> 4) & 0x000F;
+
+    switch ((inst.opcode >> 12) & 0x000F) {
+    case 0x0:
+      switch (inst.kk) {
+      case 0xE0: // 0x00E0 - Clear the display
+        std::cout << "0x00E0 - Clear the display: Set all bools in display[] to false" << std::endl;
+        break;
+      case 0xEE: // 0x00EE - Return from a subroutine
+        std::cout << "Set PC to: " << PC << " (Return Address), popped this address from stack" << std::endl;
+        break;
+      }
+      break;
+
+    case 0x01: // 0x1nnn - Jump to address nnn (set PC to nnn)
+      std::cout << "0x1nnn - Jump to address nnn (set PC to " << inst.nnn << ")" << std::endl;
+      break;
+
+    case 0x02:           // 0x2nnn - Call subroutine at nnn
+      std::cout << "0x2nnn - Call subroutine at nnn: " << inst.nnn << ". Store current/return address (PC): " << PC << " on top of stack. Set PC to nnn: " << inst.nnn << "." << std::endl;
+      break;
+
+    case 0x03: // 0x3xkk - Skip next instruction if Vx = kk
+      std::cout << "0x3xkk - Skip next instruction if Vx = kk. Vx = " << V[inst.x] << ", kk = " << inst.kk << "." << std::endl;
+      break;
+
+    case 0x04: // 0x4xkk - Skip next instruction if Vx != kk
+      std::cout << "0x4xkk - Skip next instruction if Vx != kk. Vx = " << V[inst.x] << ", kk = " << inst.kk << "." << std::endl;
+      break;
+
+    case 0x05: // 0x5xy0 - Skip next instruction if Vx = Vy
+      std::cout << "0x5xy0 - Skip next instruction if Vx = Vy. Vx = " << V[inst.x] << ", Vy = " << V[inst.y] << "." << std::endl;
+      break;
+
+    case 0x06: // 0x6xkk - Set Vx = kk
+      std::cout << "0x6xkk - Set Vx = kk. Vx now is: " << V[inst.x] << "." << std::endl;
+      break;
+
+    case 0x07: // 0x7xkk - Set Vx = Vx + kk
+      std::cout << "0x7xkk - Set Vx = Vx + kk. Vx is now: " << V[inst.x] << "." << std::endl;
+      break;
+
+    case 0x08:
+      switch (inst.n) {
+      case 0x00: // 0x8xy0 - Set Vx = Vy
+        std::cout << "0x8xy0 - Set Vx = Vy. Vx is now: " << V[inst.x] << ". Vy is: " << V[inst.y] << "." << std::endl;
+        break;
+
+      case 0x01: // 0x8xy1 - Set Vx = Vx OR Vy
+        std::cout << "0x8xy1 - Set Vx = Vx OR Vy. Vx is now: " << V[inst.x] << "." << std::endl; 
+        break;
+
+      case 0x02: // 0x8xy2 - Set Vx = Vx AND Vy
+        std::cout << "0x8xy2 - Set Vx = Vx AND Vy. Vx is now: " << V[inst.x] << "." << std::endl; 
+        break;
+
+      case 0x03: // 0x8xy3 - Set Vx = Vx XOR Vy
+        std::cout << "0x8xy3 - Set Vx = Vx XOR Vy. Vx is now: " << V[inst.x] << "." << std::endl; 
+        break;
+
+      case 0x04: // 0x8xy4 - Set Vx = Vx + Vy, set VF = carry
+        std::cout << "0x8xy4 - Set Vx = Vx + Vy, set VF = carry." << " Vy: " << V[inst.y] << ", Vx after: " << V[inst.x] << ", VF after: " << V[0x0F] << std::endl;
+        break;
+
+      case 0x05: // 0x8xy5 - Set Vx = Vx - Vy, set VF = NOT borrow
+        std::cout << "0x8xy5 - Set Vx = Vx - Vy, set VF = NOT borrow." << " Vy: " << V[inst.y] << ", Vx after: " << V[inst.x] << ", VF after: " << V[0x0F] << std::endl;
+        break;
+
+      case 0x06: // 0x8xy6 - Set Vx = Vx SHR 1
+        std::cout << "0x8xy6 - Set Vx = Vx SHR 1." << " Vx is now: " << V[inst.x] << ", VF is now: " << V[0x0F] << "." << std::endl;
+        break;
+
+      case 0x07: // 0x8xy7 - Set Vx = Vy - Vx, set VF = NOT borrow
+        std::cout << "0x8xy5 - Set Vx = Vy - Vx, set VF = NOT borrow." << " Vy: " << V[inst.y] << ", Vx after: " << V[inst.x] << ", VF after: " << V[0x0F] << std::endl;
+        break;
+
+      case 0x0E: // 0x8xyE - Set Vx = Vx SHL 1
+        std::cout << "0x8xyE - Set Vx = Vx SHL 1." << " Vx is now: " << V[inst.x] << ", VF is now: " << V[0x0F] << "." << std::endl;
+        break;
+      }
+      break;
+
+    case 0x09: // 0x9xy0 - Skip next instruction if Vx != Vy
+      std::cout << "0x9xy0 - Skip next instruction if Vx != Vy. Vx is: " << V[inst.x] << ", Vy is: " << V[inst.y] << "." << " PC is now: " << PC << "." << std::endl;
+      break;
+
+    case 0x0A: // 0xAnnn - Set register I to nnn
+      std::cout << "0xAnnn - Set register I to nnn. Index is now: " << I << "." << std::endl;
+      break;
+
+    case 0x0B: // 0xBnnn - Jump to location nnn + V0
+      std::cout << "0xBnnn - Jump to location nnn + V0. V0 is: " << V[0] << ", PC is now: " << PC << "." << std::endl;
+      break;
+
+    case 0x0C: // 0xCxkk - Set Vx = random byte AND kk
+      std::cout << "0xCxkk - Set Vx = random byte AND kk. Vx is now: " << V[inst.x] << "." << std::endl;
+      break;
+
+    case 0x0D: // 0xDxyn - Display n-byte sprite starting at memory location I
+               // at (Vx, Vy), set VF = collision
+    {
+      std::cout << "0xDxyn - Display n-byte sprite starting at memory location I: " << I << ", at (Vx, Vy): (" << V[inst.x] << ", " << V[inst.y] << ")" << ", set VF = collision: VF = " << V[0x0F] << "." << std::endl;
+    } break;
+
+    case 0x0E:
+      switch (inst.kk) {
+      case 0x9E: // 0xEx9E - Skip next instruction if key with the value of Vx
+                 // is pressed
+        std::cout << "0xEx9E - Skip next instruction if key with the value of Vx is pressed. Vx is: " << V[inst.x] << "Is key pressed? (1 for yes, 0 for no): " << keypad[V[inst.x]] << "." << std::endl;
+        break;
+
+      case 0xA1: // 0xExA1 - Skip next instruction if key with value of Vx is
+                 // not pressed
+        std::cout << "0xExA1 - Skip next instruction if key with the value of Vx is not pressed. Vx is: " << V[inst.x] << "Is key pressed? (1 for yes, 0 for no): " << keypad[V[inst.x]] << "." << std::endl;
+        break;
+      }
+      break;
+
+    case 0x0F:
+      switch (inst.kk) {
+      case 0x07: // 0xFx07 - Set Vx = delay timer value
+        std::cout << "0xFx07 - Set Vx = delay timer value. Delay timer value: " << delay_timer << ", Vx is now: " << V[inst.x] << "." << std::endl;
+        break;
+
+      case 0x0A: // 0xFx0A - Wait for a key press, store the value of the key in
+                 // Vx
+      {
+        bool key_pressed = false;
+        for (uint8_t i = 0; i < sizeof(keypad); i++) {
+          if (keypad[i]) {
+            V[inst.x] = i;
+            key_pressed = true;
+            break;
+          }
+        }
+        std::cout << "0xFx0A - Wait for a key press, store the value of the key in Vx, otherwise stay on this instruction. Key pressed? " << key_pressed << "." << std::endl;
+      } break;
+
+      case 0x15: // 0xFx15 - Set delay timer = Vx
+        std::cout << "0xFx15 - Set delay timer = Vx. Vx is: " << V[inst.x] << ", delay timer is now: " << delay_timer << "." << std::endl;
+        break;
+
+      case 0x18: // 0xFx18 - Set sound timer = Vx
+        std::cout << "0xFx18 - Set sound timer = Vx. Vx is: " << V[inst.x] << ", sound timer is now: " << sound_timer << "." << std::endl;
+        break;
+
+      case 0x1E: // 0xFx1E - Set I = I + Vx
+        std::cout << "0xFx1E - Set I = I + Vx. Vx is: " << V[inst.x] << ", I is now: " << I << "." << std::endl;
+        break;
+
+      case 0x29: // 0xFx29 - Set I = location of sprite for digit Vx
+        // The character's location in memory should be 0x50 + Vx * (5 bytes)
+        std::cout << "0xFx29 - Set I = location of sprite for digit Vx. Byte at 0x50 + V[inst.x] * 5: " << ram[0x50 + V[inst.x] * 5] << ", I is now: " << I << "." << std::endl;
+        break;
+
+      case 0x33: // 0xFx33 - Store BCD representation of Vx in memory locations
+                 // I, I+1, and I+2
+        std::cout << "0xFx33 - Store BCD representation of Vx in memory locations I, I+1, I+2. Vx is: " << V[inst.x] << ", ram[I+2] is: " << ram[I+2] << ", ram[I+1] is: " << ram[I+1] << ", ram[I] is: " << ram[I] << "." << std::endl;
+        break;
+
+      case 0x55: // 0xFx55 - Store registers V0 through Vx in memory starting at
+                 // location I
+        // For the super CHIP8, I shouldn't be incremented (opposite for CHIP8)
+        std::cout << "0xFx55 - Store registers V0 through Vx in memory starting at I." << std::endl;
+        break;
+
+      case 0x65: // 0xFx65 - Store into registers V0 through Vx from memory starting
+                 // at location I
+        std::cout << "0xFx65 - Store into registers V0 through Vx from memory starting at location I" << std::endl;
+        break;
+
+      default:
+        std::cout << "Not yet implemented" << std::endl;
+        break;
+      }
+    }
+  }
+    
 };
 
 class sdl_obj {
@@ -670,18 +869,67 @@ int main(int argc, char **argv) {
   std::cout << "About to reset screen" << std::endl;
   sdl.reset_screen(config);
   std::cout << "Screen reset" << std::endl;
+  bool cont = false;
   // Main loop
   while (chip8.state != QUIT) {
     chip8.handle_input();
-    std::cout << "About to run..." << std::endl;
-    chip8.run_instruction(config);
-    std::cout << "Instruction ran" << std::endl;
 
-    // Delays for 60Hz, should compensate for time spent executing CHIP8
-    // instructions as well
-    SDL_Delay(1000 / 60);
+    const uint64_t before_frame = SDL_GetPerformanceCounter();
+
+    // clock_speed / 60 is the number of instructions ran in one 60Hz frame
+    for (uint32_t i = 0; i < config.clock_speed / 60; i++) {
+      chip8.run_instruction(config);
+      #ifdef DEBUG
+      chip8.debug(config);
+      std::cout << "in debug >>" << std::endl;
+      
+      // Set the chip8 state to paused (must be paused to step through instructions).
+      // Then, we will wait for 'p' before continuing.
+      // Since the spacebar is also used to control CPU state, we can press spacebar or 'o'
+      // to stop the single step mode and execute all of the instructions as normally (with debug output).
+      SDL_Event debug_event;
+      
+      while (cont == false) {
+        while (SDL_PollEvent(&debug_event)) {
+          switch (debug_event.type) {
+          case SDL_KEYDOWN:
+            switch (debug_event.key.keysym.sym) {
+            case SDLK_p:
+              cont = false;
+              break;
+
+            case SDLK_o:
+              cont = true;
+              break;
+            }
+            break;
+
+          case SDL_QUIT:
+            chip8.state == QUIT;
+            break;
+          }
+          break;
+        }
+        if (cont == false) break;
+      }
+      
+      #endif // DEBUG
+      
+    }
+
+    const uint64_t after_frame = SDL_GetPerformanceCounter();
+
+    const double time_elapsed =
+        (double)((after_frame - before_frame) * 1000) / SDL_GetPerformanceFrequency();
+
+    // Delays for 60Hz, compensates for time spend executing instructions. 
+    // If time spend executing instructions is greater than 16 ms, 
+    // there is no reason to delay, as the machine is "lagging" anyways; 
+    // delay for 0ms in this case
+    SDL_Delay(16.6667f > time_elapsed ? 16.6667f - time_elapsed : 0);
 
     sdl.update_screen(chip8, config);
+    chip8.update_timers();
   }
 
   sdl.exit_cleanup();
