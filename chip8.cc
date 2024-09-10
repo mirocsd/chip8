@@ -86,6 +86,9 @@ class chip8_obj {
   const uint32_t start_address = 0x200;
   chip8_obj() {
     state = RUNNING;
+    #ifdef DEBUG
+    state = PAUSED;
+    #endif // DEBUG
     PC = start_address;
     stack_ptr = stack;
     memset(ram, 0, sizeof(ram));
@@ -448,10 +451,12 @@ class chip8_obj {
     {
       uint8_t x = V[inst.x] % config.SCREEN_WIDTH;
       uint8_t y = V[inst.y] % config.SCREEN_HEIGHT;
+      uint8_t x_o = x;
       uint8_t height = inst.n;
       V[0xF] = 0;
       for (uint8_t row = 0; row < height; ++row) {
         uint8_t sprite_byte = ram[I + row];
+        x = x_o; // Reset x coordinate to origin
         for (uint8_t col = 0; col < 8; ++col) {
           uint8_t sprite_pixel = sprite_byte & (0x80 >> col);
           uint32_t display_index =
@@ -490,9 +495,11 @@ class chip8_obj {
                  // Vx
       {
         bool key_pressed = false;
+        uint8_t key = 0xFF;
+
         for (uint8_t i = 0; i < sizeof(keypad); i++) {
           if (keypad[i]) {
-            V[inst.x] = i;
+            key = i;
             key_pressed = true;
             break;
           }
@@ -501,6 +508,11 @@ class chip8_obj {
         // since we had pre-incremented earlier, we need to decrement now to
         // remain on this instruction
         if (!key_pressed) { PC -= 2; }
+        else {
+          V[inst.x] = key;
+          key = 0xFF;
+          key_pressed = false;
+        }
       } break;
 
       case 0x15: // 0xFx15 - Set delay timer = Vx
@@ -517,7 +529,7 @@ class chip8_obj {
 
       case 0x29: // 0xFx29 - Set I = location of sprite for digit Vx
         // The character's location in memory should be 0x50 + Vx * (5 bytes)
-        I = 0x50 + V[inst.x] * 5;
+        I = V[inst.x] * 5;
         std::cout << "Byte at V[inst.x] * 5: " << ram[V[inst.x] * 5]
                   << std::endl;
         break;
@@ -545,7 +557,7 @@ class chip8_obj {
       case 0x65: // 0xFx65 - Read registers V0 through Vx from memory starting
                  // at location I
         for (uint8_t i = 0; i <= inst.x; i++) {
-          V[i] = ram[I + i];
+          V[i] = ram[I++];
         }
         break;
 
@@ -582,6 +594,7 @@ class chip8_obj {
     inst.x = (inst.opcode >> 8) & 0x000F;
     inst.y = (inst.opcode >> 4) & 0x000F;
 
+    std::cout << std::dec;
     switch ((inst.opcode >> 12) & 0x000F) {
     case 0x0:
       switch (inst.kk) {
@@ -707,6 +720,7 @@ class chip8_obj {
       case 0x0A: // 0xFx0A - Wait for a key press, store the value of the key in
                  // Vx
       {
+        /*
         bool key_pressed = false;
         for (uint8_t i = 0; i < sizeof(keypad); i++) {
           if (keypad[i]) {
@@ -715,7 +729,8 @@ class chip8_obj {
             break;
           }
         }
-        std::cout << "0xFx0A - Wait for a key press, store the value of the key in Vx, otherwise stay on this instruction. Key pressed? " << key_pressed << "." << std::endl;
+        */
+        std::cout << "0xFx0A - Wait for a key press, store the value of the key in Vx, otherwise stay on this instruction. Key pressed? "/* << key_pressed << "." */<< std::endl;
       } break;
 
       case 0x15: // 0xFx15 - Set delay timer = Vx
@@ -869,7 +884,7 @@ int main(int argc, char **argv) {
   std::cout << "About to reset screen" << std::endl;
   sdl.reset_screen(config);
   std::cout << "Screen reset" << std::endl;
-  bool cont = false;
+
   // Main loop
   while (chip8.state != QUIT) {
     chip8.handle_input();
@@ -878,43 +893,52 @@ int main(int argc, char **argv) {
 
     // clock_speed / 60 is the number of instructions ran in one 60Hz frame
     for (uint32_t i = 0; i < config.clock_speed / 60; i++) {
-      chip8.run_instruction(config);
+      if (chip8.state == RUNNING) {
+        chip8.run_instruction(config);
+      }
+
       #ifdef DEBUG
-      chip8.debug(config);
-      std::cout << "in debug >>" << std::endl;
-      
       // Set the chip8 state to paused (must be paused to step through instructions).
       // Then, we will wait for 'p' before continuing.
       // Since the spacebar is also used to control CPU state, we can press spacebar or 'o'
       // to stop the single step mode and execute all of the instructions as normally (with debug output).
-      SDL_Event debug_event;
       
-      while (cont == false) {
-        while (SDL_PollEvent(&debug_event)) {
-          switch (debug_event.type) {
-          case SDL_KEYDOWN:
-            switch (debug_event.key.keysym.sym) {
-            case SDLK_p:
+      
+      if (chip8.state == PAUSED) {
+        bool cont = true;
+        while (cont) {
+          SDL_Event debug_event;
+          while (SDL_PollEvent(&debug_event)) {
+            switch (debug_event.type) {
+            case SDL_KEYDOWN:
+              switch (debug_event.key.keysym.sym) {
+              case SDLK_p:
+                chip8.run_instruction(config);
+                chip8.debug(config);
+                cont = false;
+                break;
+
+              case SDLK_o:
+                chip8.state = RUNNING;
+                cont = false;
+                break;
+
+              case SDLK_ESCAPE:
+                chip8.state = QUIT;
+                cont = false;
+                break;
+              }
+              break;
+
+            case SDL_QUIT:
+              chip8.state == QUIT;
               cont = false;
               break;
-
-            case SDLK_o:
-              cont = true;
-              break;
             }
-            break;
-
-          case SDL_QUIT:
-            chip8.state == QUIT;
-            break;
           }
-          break;
         }
-        if (cont == false) break;
       }
-      
       #endif // DEBUG
-      
     }
 
     const uint64_t after_frame = SDL_GetPerformanceCounter();
